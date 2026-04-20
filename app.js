@@ -9,7 +9,7 @@
   // ==========================================
   const CONFIG_KEY = 'cp_config';
   const DEFAULT_API_KEY = 'AIzaSyDgqxL14Q4JxlIHFO-X76OYqpRp4gywIlY';
-  const GEMINI_MODEL = 'gemini-2.0-flash';
+  const GEMINI_MODEL = 'gemini-2.5-flash';
   const DEDUCTION_RATE = 0.04; // 4%
 
   let appConfig = {
@@ -269,12 +269,26 @@ Rules:
 
       const result = await response.json();
 
-      // Safely navigate the response
-      const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) {
+      // Safely navigate the response — thinking models may return thought parts before text
+      const parts = result?.candidates?.[0]?.content?.parts;
+      if (!parts || parts.length === 0) {
         throw new Error('Empty response from analysis engine');
       }
 
+      // Find the last text part (thinking models put thoughts first, answer last)
+      let text = null;
+      for (let i = parts.length - 1; i >= 0; i--) {
+        if (parts[i].text) {
+          text = parts[i].text;
+          break;
+        }
+      }
+
+      if (!text) {
+        throw new Error('No text in response');
+      }
+
+      console.log('Raw API response text:', text);
       const data = JSON.parse(text);
       renderResults(data);
       showToast('Analysis complete');
