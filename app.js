@@ -1,21 +1,22 @@
-// Check Please — v2.0
+// Check Please — v2.1
 // =====================
 
 (function () {
   'use strict';
 
   // ==========================================
-  // CONFIG & STATE
+  // HARDCODED SUPABASE (public anon key, safe with RLS)
   // ==========================================
-  const CONFIG_KEY = 'cp_config';
-  const DEFAULT_API_KEY = '';
+  const SB_URL = 'https://oayovbcpmxoakuoigfyz.supabase.co';
+  const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9heW92YmNwbXhvYWt1b2lnZnl6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4NDQ4NTcsImV4cCI6MjA5MTQyMDg1N30.itFqLALyOTaB2fc9n8rfo_orcgg1YXNowql_Iw0ryrE';
+
   const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
   const DEDUCTION_RATE = 0.04;
 
-  let appConfig = { apiKey: DEFAULT_API_KEY, sbUrl: '', sbKey: '' };
+  let apiKey = '';
+  let sbClient = null;
   let selectedFiles = [];
   let objectUrls = [];
-  let sbClient = null;
   let currentResults = null;
   let toastTimer = null;
 
@@ -24,94 +25,86 @@
   // ==========================================
   document.addEventListener('DOMContentLoaded', init);
 
-  function init() {
-    loadConfig();
+  async function init() {
     initSupabase();
+    await loadApiKey();
     setupNavigation();
     setupEventListeners();
     setupToggleVisibility();
   }
 
   // ==========================================
-  // CONFIG
-  // ==========================================
-  function loadConfig() {
-    // Priority: URL hash > localStorage
-    let loaded = false;
-
-    // 1. Try loading from URL hash (works in incognito)
-    const hash = window.location.hash.slice(1);
-    if (hash) {
-      try {
-        const decoded = JSON.parse(atob(hash));
-        if (decoded.apiKey || decoded.sbUrl) {
-          appConfig.apiKey = decoded.apiKey || DEFAULT_API_KEY;
-          appConfig.sbUrl = decoded.sbUrl || '';
-          appConfig.sbKey = decoded.sbKey || '';
-          // Also persist to localStorage for normal tabs
-          try { localStorage.setItem(CONFIG_KEY, JSON.stringify(appConfig)); } catch(e) {}
-          loaded = true;
-        }
-      } catch (e) { /* invalid hash, ignore */ }
-    }
-
-    // 2. Fallback to localStorage
-    if (!loaded) {
-      try {
-        const saved = localStorage.getItem(CONFIG_KEY);
-        if (saved) {
-          const p = JSON.parse(saved);
-          appConfig.apiKey = p.apiKey || DEFAULT_API_KEY;
-          appConfig.sbUrl = p.sbUrl || '';
-          appConfig.sbKey = p.sbKey || '';
-          loaded = true;
-        }
-      } catch (e) { /* use defaults */ }
-    }
-
-    document.getElementById('input-api-key').value = appConfig.apiKey;
-    document.getElementById('input-sb-url').value = appConfig.sbUrl;
-    document.getElementById('input-sb-key').value = appConfig.sbKey;
-  }
-
-  function saveConfig() {
-    appConfig.apiKey = document.getElementById('input-api-key').value.trim() || DEFAULT_API_KEY;
-    appConfig.sbUrl = document.getElementById('input-sb-url').value.trim();
-    appConfig.sbKey = document.getElementById('input-sb-key').value.trim();
-
-    // Save to localStorage
-    try { localStorage.setItem(CONFIG_KEY, JSON.stringify(appConfig)); } catch(e) {}
-
-    // Encode config into URL hash (so bookmarking/incognito works)
-    const encoded = btoa(JSON.stringify(appConfig));
-    history.replaceState(null, '', '#' + encoded);
-
-    initSupabase();
-    showToast('Saved — bookmark this page to keep your config');
-  }
-
-  // ==========================================
-  // SUPABASE
+  // SUPABASE — always connected
   // ==========================================
   function initSupabase() {
-    const el = document.getElementById('system-status-msg');
-
-    if (!appConfig.sbUrl || !appConfig.sbKey) {
-      sbClient = null;
-      el.textContent = 'Database not configured';
-      el.className = 'system-status';
-      return;
-    }
-
     try {
-      sbClient = window.supabase.createClient(appConfig.sbUrl, appConfig.sbKey);
-      el.textContent = '● Connected';
-      el.className = 'system-status connected';
-      loadHistory();
+      sbClient = window.supabase.createClient(SB_URL, SB_KEY);
+      setStatus('connected', '● Connected');
     } catch (e) {
       sbClient = null;
-      el.textContent = '● Connection failed';
-      el.className = 'system-status error';
+      setStatus('error', '● Connection failed');
+    }
+  }
+
+  function setStatus(type, text) {
+    const el = document.getElementById('system-status-msg');
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'system-status' + (type ? ' ' + type : '');
+  }
+
+  // ==========================================
+  // API KEY — stored in Supabase app_config
+  // ==========================================
+  async function loadApiKey() {
+    // 1. Try from Supabase
+    if (sbClient) {
+      try {
+        const { data } = await sbClient
+          .from('app_config')
+          .select('value')
+          .eq('key', 'gemini_api_key')
+          .single();
+        if (data?.value) {
+          apiKey = data.value;
+          document.getElementById('input-api-key').value = apiKey;
+          return;
+        }
+      } catch (e) { /* no key yet */ }
+    }
+
+    // 2. Fallback to localStorage (legacy)
+    try {
+      const saved = localStorage.getItem('cp_api_key');
+      if (saved) {
+        apiKey = saved;
+        document.getElementById('input-api-key').value = apiKey;
+      }
+    } catch (e) {}
+  }
+
+  async function saveApiKey() {
+    const newKey = document.getElementById('input-api-key').value.trim();
+    if (!newKey) { showToast('Enter a valid key'); return; }
+
+    apiKey = newKey;
+
+    // Save to Supabase (upsert)
+    if (sbClient) {
+      try {
+        const { error } = await sbClient
+          .from('app_config')
+          .upsert({ key: 'gemini_api_key', value: apiKey }, { onConflict: 'key' });
+        if (error) throw error;
+        showToast('Key saved to cloud');
+      } catch (e) {
+        console.error('Save key error:', e);
+        showToast('Cloud save failed, saved locally');
+        try { localStorage.setItem('cp_api_key', apiKey); } catch (e2) {}
+      }
+    } else {
+      try { localStorage.setItem('cp_api_key', apiKey); } catch (e) {}
+      showToast('Key saved locally');
     }
   }
 
@@ -140,7 +133,7 @@
   // EVENT LISTENERS
   // ==========================================
   function setupEventListeners() {
-    document.getElementById('btn-save-settings').addEventListener('click', saveConfig);
+    document.getElementById('btn-save-settings').addEventListener('click', saveApiKey);
     document.getElementById('btn-camera').addEventListener('click', () => document.getElementById('camera-input').click());
     document.getElementById('btn-gallery').addEventListener('click', () => document.getElementById('gallery-input').click());
     document.getElementById('camera-input').addEventListener('change', handleFileSelect);
@@ -152,15 +145,9 @@
   }
 
   function setupToggleVisibility() {
-    const pairs = [
-      ['toggle-api-key', 'input-api-key'],
-      ['toggle-sb-key', 'input-sb-key']
-    ];
-    pairs.forEach(([btnId, inputId]) => {
-      document.getElementById(btnId).addEventListener('click', () => {
-        const input = document.getElementById(inputId);
-        input.type = input.type === 'password' ? 'text' : 'password';
-      });
+    document.getElementById('toggle-api-key').addEventListener('click', () => {
+      const input = document.getElementById('input-api-key');
+      input.type = input.type === 'password' ? 'text' : 'password';
     });
   }
 
@@ -187,7 +174,6 @@
     const countEl = document.getElementById('selected-count');
     const emptyState = document.getElementById('empty-state');
 
-    // Revoke old URLs
     objectUrls.forEach(u => URL.revokeObjectURL(u));
     objectUrls = [];
 
@@ -215,13 +201,13 @@
       img.className = 'img-thumb';
       img.alt = 'Receipt';
 
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'img-remove';
-      removeBtn.innerHTML = '×';
-      removeBtn.addEventListener('click', () => removeFile(i));
+      const btn = document.createElement('button');
+      btn.className = 'img-remove';
+      btn.innerHTML = '×';
+      btn.addEventListener('click', () => removeFile(i));
 
       wrap.appendChild(img);
-      wrap.appendChild(removeBtn);
+      wrap.appendChild(btn);
       container.appendChild(wrap);
     });
   }
@@ -255,7 +241,7 @@ Rules:
 - Use the TOTAL / TOPLAM / Grand Total line, NOT individual item prices.
 - ₺ or TRY → "TL".
 - If currency is unclear, default to TL.
-- Plain numbers (no thousands separators). Dot for decimals.
+- Plain numbers, dot for decimals.
 - If no amount found for a currency, set to 0.`;
 
   function toBase64(file) {
@@ -268,7 +254,7 @@ Rules:
   }
 
   async function processReceipts() {
-    if (!appConfig.apiKey) { showToast('Set your key in settings'); return; }
+    if (!apiKey) { showToast('Set your key in settings'); return; }
     if (selectedFiles.length === 0) return;
 
     const indicator = document.getElementById('status-indicator');
@@ -295,7 +281,7 @@ Rules:
       for (const model of GEMINI_MODELS) {
         try {
           const res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${appConfig.apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
             { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
           );
 
@@ -309,7 +295,6 @@ Rules:
           const rParts = result?.candidates?.[0]?.content?.parts;
           if (!rParts?.length) { lastErr = new Error('Empty response'); continue; }
 
-          // Find last text part (thinking models put thoughts first)
           let txt = null;
           for (let i = rParts.length - 1; i >= 0; i--) {
             if (rParts[i].text) { txt = rParts[i].text; break; }
@@ -329,7 +314,6 @@ Rules:
     } catch (err) {
       console.error(err);
       showToast(err.message || 'Processing failed');
-      // Show preview again so user can retry
       document.getElementById('preview-section').style.display = 'block';
     } finally {
       indicator.style.display = 'none';
@@ -360,7 +344,7 @@ Rules:
       const total = currentResults[curr];
       const net = round2(total * (1 - DEDUCTION_RATE));
       const card = document.createElement('div');
-      card.className = 'curr-card';
+      card.className = 'curr-card' + (active.length === 1 ? ' full-width' : '');
       card.innerHTML = `
         <div class="curr-label">${curr}</div>
         <div class="curr-val">${symbols[curr]}${fmt(total)}</div>
@@ -369,21 +353,15 @@ Rules:
       grid.appendChild(card);
     });
 
-    // If only one currency, make it span full width
-    if (active.length === 1) {
-      grid.querySelector('.curr-card').classList.add('full-width');
-    }
-
     document.getElementById('results-panel').style.display = 'block';
-    // Scroll results into view
     document.getElementById('results-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   // ==========================================
-  // DATABASE
+  // DATABASE — SAVE / HISTORY
   // ==========================================
   async function saveRecord() {
-    if (!sbClient) { showToast('Configure database in settings'); return; }
+    if (!sbClient) { showToast('Database error'); return; }
     if (!currentResults) return;
 
     const btn = document.getElementById('btn-save-record');
@@ -399,7 +377,6 @@ Rules:
           raw_data: currentResults
         }]);
       if (error) throw error;
-
       showToast('Record saved');
       resetScanUI();
     } catch (e) {
@@ -448,11 +425,7 @@ Rules:
 
         let stats = currencies
           .filter(c => Number(row[c.key] || 0) > 0)
-          .map(c => {
-            const v = Number(row[c.key]);
-            const n = round2(v * (1 - DEDUCTION_RATE));
-            return `<div class="h-stat"><span>${c.label}</span> ${symbols[c.key]}${fmt(v)}</div>`;
-          })
+          .map(c => `<div class="h-stat"><span>${c.label}</span> ${symbols[c.key]}${fmt(row[c.key])}</div>`)
           .join('');
 
         if (!stats) stats = '<div class="h-stat" style="color:var(--text-3)">No amounts</div>';

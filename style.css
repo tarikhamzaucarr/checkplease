@@ -338,6 +338,11 @@ input { font-family: inherit; }
 .settings-container {
   padding-top: 24px;
 }
+.form-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 8px;
+}
 .settings-title {
   font-size: 16px;
   font-weight: 700;
