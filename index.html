@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#050505">
+  <title>Check Please</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="logo">Check Please.</div>
+    <div class="nav">
+      <button class="nav-btn active" data-target="scan-page">Scan</button>
+      <button class="nav-btn" data-target="history-page">History</button>
+      <button class="nav-btn" data-target="settings-page">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- View: SCAN -->
+  <main id="scan-page" class="view active">
+    <div class="padded-container flex-fill center-content">
+      
+      <div class="actions-wrapper">
+        <input type="file" id="camera-input" accept="image/*" capture="environment" hidden multiple>
+        <input type="file" id="gallery-input" accept="image/*" hidden multiple>
+        
+        <button class="primary-btn" id="btn-camera">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+          Scan Receipts
+        </button>
+        <button class="secondary-btn" id="btn-gallery">Select from Gallery</button>
+      </div>
+
+      <div class="selected-images" id="image-preview-container" style="display:none;"></div>
+
+      <button id="btn-process" class="primary-btn mt-4 full-width" style="display:none;">
+        Process Receipts
+      </button>
+
+      <div class="status-indicator" id="status-indicator" style="display:none;">
+        Processing...
+      </div>
+
+      <!-- Results Panel -->
+      <div class="results-panel" id="results-panel" style="display:none;">
+        <h3 class="section-title">Results</h3>
+        <div class="currency-grid">
+          <!-- TL -->
+          <div class="curr-card">
+            <div class="curr-label">TL</div>
+            <div class="curr-val" id="res-val-tl">0.00</div>
+            <div class="curr-deduction">Net (-4%): <span id="res-net-tl">0.00</span></div>
+          </div>
+          <!-- USD -->
+          <div class="curr-card">
+            <div class="curr-label">USD</div>
+            <div class="curr-val" id="res-val-usd">0.00</div>
+            <div class="curr-deduction">Net (-4%): <span id="res-net-usd">0.00</span></div>
+          </div>
+          <!-- EUR -->
+          <div class="curr-card">
+            <div class="curr-label">EUR</div>
+            <div class="curr-val" id="res-val-eur">0.00</div>
+            <div class="curr-deduction">Net (-4%): <span id="res-net-eur">0.00</span></div>
+          </div>
+          <!-- GBP -->
+          <div class="curr-card">
+            <div class="curr-label">GBP</div>
+            <div class="curr-val" id="res-val-gbp">0.00</div>
+            <div class="curr-deduction">Net (-4%): <span id="res-net-gbp">0.00</span></div>
+          </div>
+        </div>
+
+        <button id="btn-save-record" class="primary-btn full-width save-btn">Save Record</button>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- View: HISTORY -->
+  <main id="history-page" class="view">
+    <div class="padded-container history-container" id="history-container">
+      <div class="history-empty">No records found.</div>
+    </div>
+  </main>
+
+  <!-- View: SETTINGS -->
+  <main id="settings-page" class="view">
+    <div class="padded-container settings-container">
+      <div class="form-group">
+        <label>Configuration Key</label>
+        <input type="password" id="input-api-key" placeholder="Enter processing key...">
+      </div>
+      <div class="form-group">
+        <label>Database URL</label>
+        <input type="text" id="input-sb-url" placeholder="https://....supabase.co">
+      </div>
+      <div class="form-group">
+        <label>Database Key</label>
+        <input type="password" id="input-sb-key" placeholder="anon key...">
+      </div>
+      <button class="primary-btn mt-2" id="btn-save-settings">Save Configuration</button>
+      
+      <div class="system-status" id="system-status-msg"></div>
+    </div>
+  </main>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast">Action successful</div>
+
+  <script src="app.js"></script>
+</body>
+</html>
