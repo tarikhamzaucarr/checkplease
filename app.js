@@ -29,11 +29,16 @@ function loadConfig() {
   const saved = localStorage.getItem(CONFIG_KEY);
   if (saved) {
     try {
-      appConfig = JSON.parse(saved);
-      document.getElementById('input-api-key').value = appConfig.apiKey || '';
-      document.getElementById('input-sb-url').value = appConfig.sbUrl || '';
-      document.getElementById('input-sb-key').value = appConfig.sbKey || '';
+      const parsed = JSON.parse(saved);
+      appConfig.apiKey = parsed.apiKey || appConfig.apiKey;
+      appConfig.sbUrl = parsed.sbUrl || '';
+      appConfig.sbKey = parsed.sbKey || '';
+      document.getElementById('input-api-key').value = appConfig.apiKey;
+      document.getElementById('input-sb-url').value = appConfig.sbUrl;
+      document.getElementById('input-sb-key').value = appConfig.sbKey;
     } catch(e) {}
+  } else {
+    document.getElementById('input-api-key').value = appConfig.apiKey;
   }
 }
 
@@ -201,7 +206,7 @@ async function processReceipts() {
       generationConfig: { temperature: 0, responseMimeType: 'application/json' }
     };
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent?key=${appConfig.apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${appConfig.apiKey}`;
     
     const res = await fetch(url, {
       method: 'POST',
