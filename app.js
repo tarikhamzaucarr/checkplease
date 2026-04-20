@@ -1,347 +1,477 @@
-// Check Please - Application Logic
+// Check Please — Application Logic
+// ==================================
 
-// ==========================================
-// STATE & CONFIG
-// ==========================================
-const CONFIG_KEY = 'cp_config';
-let appConfig = {
-  apiKey: 'AIzaSyDgqxL14Q4JxlIHFO-X76OYqpRp4gywIlY',     // The "processing key" (Gemini AI Key)
-  sbUrl: '',      // Supabase URL
-  sbKey: ''       // Supabase Anon Key
-};
+(function () {
+  'use strict';
 
-let selectedFiles = [];
-let supabase = null;
-let currentResults = null; // Stores parsed output of the current operation
+  // ==========================================
+  // CONFIG & STATE
+  // ==========================================
+  const CONFIG_KEY = 'cp_config';
+  const DEFAULT_API_KEY = 'AIzaSyDgqxL14Q4JxlIHFO-X76OYqpRp4gywIlY';
+  const GEMINI_MODEL = 'gemini-2.0-flash';
+  const DEDUCTION_RATE = 0.04; // 4%
 
-// ==========================================
-// INITIALIZATION
-// ==========================================
-document.addEventListener('DOMContentLoaded', () => {
-  loadConfig();
-  initSupabase();
-  setupNavigation();
-  setupEventListeners();
-  loadHistory();
-});
+  let appConfig = {
+    apiKey: DEFAULT_API_KEY,
+    sbUrl: '',
+    sbKey: ''
+  };
 
-function loadConfig() {
-  const saved = localStorage.getItem(CONFIG_KEY);
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved);
-      appConfig.apiKey = parsed.apiKey || appConfig.apiKey;
-      appConfig.sbUrl = parsed.sbUrl || '';
-      appConfig.sbKey = parsed.sbKey || '';
-      document.getElementById('input-api-key').value = appConfig.apiKey;
-      document.getElementById('input-sb-url').value = appConfig.sbUrl;
-      document.getElementById('input-sb-key').value = appConfig.sbKey;
-    } catch(e) {}
-  } else {
-    document.getElementById('input-api-key').value = appConfig.apiKey;
+  let selectedFiles = [];
+  let objectUrls = [];       // Track to revoke later
+  let sbClient = null;       // Supabase client (renamed to avoid global collision)
+  let currentResults = null;
+  let toastTimer = null;
+
+  // ==========================================
+  // INITIALIZATION
+  // ==========================================
+  document.addEventListener('DOMContentLoaded', init);
+
+  function init() {
+    loadConfig();
+    initSupabase();
+    setupNavigation();
+    setupEventListeners();
   }
-}
 
-function saveConfig() {
-  appConfig.apiKey = document.getElementById('input-api-key').value.trim();
-  appConfig.sbUrl = document.getElementById('input-sb-url').value.trim();
-  appConfig.sbKey = document.getElementById('input-sb-key').value.trim();
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(appConfig));
-  initSupabase();
-  showToast('Configuration saved');
-}
-
-function initSupabase() {
-  if (appConfig.sbUrl && appConfig.sbKey) {
-    try {
-      supabase = window.supabase.createClient(appConfig.sbUrl, appConfig.sbKey);
-      document.getElementById('system-status-msg').textContent = 'Database connected state: Active';
-      loadHistory();
-    } catch(e) {
-      document.getElementById('system-status-msg').textContent = 'Database connection failed';
-    }
-  } else {
-    document.getElementById('system-status-msg').textContent = 'Database configuration missing';
-  }
-}
-
-// ==========================================
-// UI / NAVIGATION
-// ==========================================
-function setupNavigation() {
-  const navBtns = document.querySelectorAll('.nav-btn');
-  const views = document.querySelectorAll('.view');
-
-  navBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      // Clear active states
-      navBtns.forEach(b => b.classList.remove('active'));
-      views.forEach(v => v.classList.remove('active'));
-      
-      // Set new active
-      btn.classList.add('active');
-      const targetId = btn.getAttribute('data-target');
-      document.getElementById(targetId).classList.add('active');
-
-      if(targetId === 'history-page') {
-        loadHistory();
+  // ==========================================
+  // CONFIG MANAGEMENT
+  // ==========================================
+  function loadConfig() {
+    const saved = localStorage.getItem(CONFIG_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        appConfig.apiKey = parsed.apiKey || DEFAULT_API_KEY;
+        appConfig.sbUrl = parsed.sbUrl || '';
+        appConfig.sbKey = parsed.sbKey || '';
+      } catch (e) {
+        console.warn('Config parse error, using defaults');
       }
-    });
-  });
-}
-
-function showToast(msg) {
-  const toast = document.getElementById('toast');
-  toast.textContent = msg;
-  toast.classList.add('show');
-  setTimeout(() => {
-    toast.classList.remove('show');
-  }, 3000);
-}
-
-// ==========================================
-// FILE HANDLING
-// ==========================================
-function setupEventListeners() {
-  // Settings
-  document.getElementById('btn-save-settings').addEventListener('click', saveConfig);
-
-  // Scan Actions
-  document.getElementById('btn-camera').addEventListener('click', () => {
-    document.getElementById('camera-input').click();
-  });
-  
-  document.getElementById('btn-gallery').addEventListener('click', () => {
-    document.getElementById('gallery-input').click();
-  });
-
-  const handleFiles = (e) => {
-    if(e.target.files.length > 0) {
-      // Append to selected files
-      selectedFiles = [...selectedFiles, ...Array.from(e.target.files)];
-      renderImagePreviews();
-      document.getElementById('btn-process').style.display = 'block';
     }
-    // reset input so same file can trigger change again if needed
-    e.target.value = null; 
-  };
-
-  document.getElementById('camera-input').addEventListener('change', handleFiles);
-  document.getElementById('gallery-input').addEventListener('change', handleFiles);
-
-  // Process
-  document.getElementById('btn-process').addEventListener('click', processReceipts);
-
-  // Save Record
-  document.getElementById('btn-save-record').addEventListener('click', saveRecordToDatabase);
-}
-
-function renderImagePreviews() {
-  const container = document.getElementById('image-preview-container');
-  container.style.display = selectedFiles.length > 0 ? 'flex' : 'none';
-  container.innerHTML = '';
-  
-  selectedFiles.forEach(file => {
-    const img = document.createElement('img');
-    img.src = URL.createObjectURL(file);
-    img.className = 'img-thumb';
-    container.appendChild(img);
-  });
-}
-
-function resetScanUI() {
-  selectedFiles = [];
-  currentResults = null;
-  renderImagePreviews();
-  document.getElementById('btn-process').style.display = 'none';
-  document.getElementById('results-panel').style.display = 'none';
-  
-  const resets = ['tl', 'usd', 'eur', 'gbp'];
-  resets.forEach(c => {
-    document.getElementById(`res-val-${c}`).textContent = '0.00';
-    document.getElementById(`res-net-${c}`).textContent = '0.00';
-  });
-}
-
-// ==========================================
-// PROCESSING LOGIC (GEMINI API)
-// ==========================================
-const PROMPT = `Analyze these images of receipts/bills. Find the TOTAL amounts charged, and categorize them strictly into the following currencies: TL (Turkish Lira), USD (US Dollars), EUR (Euros), GBP (British Pounds). 
-If there are multiple receipts with the same currency, sum them up. 
-Respond ONLY with a valid JSON document in the exact format shown below, and NO OTHER TEXT or formatting:
-{"TL": 0.00, "USD": 0.00, "EUR": 0.00, "GBP": 0.00}`;
-
-async function toBase64(file) {
-  return new Promise((resolve) => {
-    const rd = new FileReader();
-    rd.onload = () => resolve(rd.result.split(',')[1]);
-    rd.readAsDataURL(file);
-  });
-}
-
-async function processReceipts() {
-  if (!appConfig.apiKey) {
-    showToast('Configuration key missing in settings.');
-    return;
+    // Populate settings form
+    document.getElementById('input-api-key').value = appConfig.apiKey;
+    document.getElementById('input-sb-url').value = appConfig.sbUrl;
+    document.getElementById('input-sb-key').value = appConfig.sbKey;
   }
-  if (selectedFiles.length === 0) return;
 
-  const btn = document.getElementById('btn-process');
-  const ind = document.getElementById('status-indicator');
-  const resPanel = document.getElementById('results-panel');
-
-  btn.style.display = 'none';
-  resPanel.style.display = 'none';
-  ind.style.display = 'block';
-
-  try {
-    const imageParts = [];
-    for (const f of selectedFiles) {
-      const b64 = await toBase64(f);
-      imageParts.push({ inlineData: { mimeType: f.type, data: b64 } });
-    }
-
-    const payload = {
-      contents: [{ parts: [...imageParts, { text: PROMPT }] }],
-      generationConfig: { temperature: 0, responseMimeType: 'application/json' }
-    };
-
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${appConfig.apiKey}`;
-    
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    const result = await res.json();
-    if (result.error) throw new Error(result.error.message);
-
-    const txt = result.candidates[0].content.parts[0].text;
-    const data = JSON.parse(txt);
-
-    renderResults(data);
-    showToast('Processing complete');
-
-  } catch(e) {
-    console.error(e);
-    showToast('Failed to process. Check configuration.');
-    btn.style.display = 'block';
-  } finally {
-    ind.style.display = 'none';
+  function saveConfig() {
+    appConfig.apiKey = document.getElementById('input-api-key').value.trim() || DEFAULT_API_KEY;
+    appConfig.sbUrl = document.getElementById('input-sb-url').value.trim();
+    appConfig.sbKey = document.getElementById('input-sb-key').value.trim();
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(appConfig));
+    initSupabase();
+    showToast('Configuration saved');
   }
-}
 
-function renderResults(data) {
-  currentResults = {
-    TL: Number(data.TL) || 0,
-    USD: Number(data.USD) || 0,
-    EUR: Number(data.EUR) || 0,
-    GBP: Number(data.GBP) || 0
-  };
+  // ==========================================
+  // SUPABASE
+  // ==========================================
+  function initSupabase() {
+    const statusEl = document.getElementById('system-status-msg');
 
-  const setVal = (curr) => {
-    const total = currentResults[curr];
-    const net = total * 0.96; // 4% deduction
-    
-    document.getElementById(`res-val-${curr.toLowerCase()}`).textContent = total.toLocaleString('tr-TR', {minimumFractionDigits:2, maximumFractionDigits:2});
-    document.getElementById(`res-net-${curr.toLowerCase()}`).textContent = net.toLocaleString('tr-TR', {minimumFractionDigits:2, maximumFractionDigits:2});
-  };
-
-  setVal('TL');
-  setVal('USD');
-  setVal('EUR');
-  setVal('GBP');
-
-  document.getElementById('results-panel').style.display = 'block';
-}
-
-// ==========================================
-// DATABASE LOGIC (SUPABASE)
-// ==========================================
-async function saveRecordToDatabase() {
-  if (!supabase) {
-    showToast('Database not configured');
-    return;
-  }
-  if (!currentResults) return;
-
-  const btn = document.getElementById('btn-save-record');
-  btn.textContent = 'Saving...';
-  btn.disabled = true;
-
-  try {
-    const { error } = await supabase
-      .from('receipt_analyses')
-      .insert([
-        { 
-          tl: currentResults.TL, 
-          usd: currentResults.USD, 
-          eur: currentResults.EUR, 
-          gbp: currentResults.GBP,
-          raw_data: currentResults
-        }
-      ]);
-
-    if (error) throw error;
-    
-    showToast('Record saved successfully');
-    resetScanUI();
-    
-    // Switch back to start of scan UI
-    document.getElementById('results-panel').style.display = 'none';
-
-  } catch(e) {
-    console.error(e);
-    showToast('Failed to save record.');
-  } finally {
-    btn.textContent = 'Save Record';
-    btn.disabled = false;
-  }
-}
-
-async function loadHistory() {
-  if (!supabase) return;
-  const container = document.getElementById('history-container');
-  
-  try {
-    const { data, error } = await supabase
-      .from('receipt_analyses')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(50);
-      
-    if (error) throw error;
-
-    if (data.length === 0) {
-      container.innerHTML = '<div class="history-empty">No records found.</div>';
+    if (!appConfig.sbUrl || !appConfig.sbKey) {
+      sbClient = null;
+      statusEl.textContent = 'Database not configured';
       return;
     }
 
-    container.innerHTML = data.map(row => {
-      const d = new Date(row.created_at);
-      const dateStr = d.toLocaleDateString('en-GB') + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-      
-      const format = (v) => Number(v || 0).toLocaleString('tr-TR', {minimumFractionDigits:2, maximumFractionDigits:2});
-      
-      let statsHTML = '';
-      if(row.tl > 0) statsHTML += `<div class="h-stat"><span>TL:</span> ${format(row.tl)} (Net: ${format(row.tl*0.96)})</div>`;
-      if(row.usd > 0) statsHTML += `<div class="h-stat"><span>USD:</span> ${format(row.usd)} (Net: ${format(row.usd*0.96)})</div>`;
-      if(row.eur > 0) statsHTML += `<div class="h-stat"><span>EUR:</span> ${format(row.eur)} (Net: ${format(row.eur*0.96)})</div>`;
-      if(row.gbp > 0) statsHTML += `<div class="h-stat"><span>GBP:</span> ${format(row.gbp)} (Net: ${format(row.gbp*0.96)})</div>`;
-      
-      if(statsHTML === '') statsHTML = '<div class="h-stat">No amounts detected</div>';
-
-      return `
-        <div class="history-item">
-          <div class="history-date">${dateStr}</div>
-          <div class="history-stats">${statsHTML}</div>
-        </div>
-      `;
-    }).join('');
-
-  } catch(e) {
-    console.error(e);
-    container.innerHTML = '<div class="history-empty">Error loading records.</div>';
+    try {
+      sbClient = window.supabase.createClient(appConfig.sbUrl, appConfig.sbKey);
+      statusEl.textContent = 'Database: Connected';
+      loadHistory(); // only load history after successful init
+    } catch (e) {
+      sbClient = null;
+      statusEl.textContent = 'Database connection failed';
+      console.error('Supabase init error:', e);
+    }
   }
-}
+
+  // ==========================================
+  // NAVIGATION
+  // ==========================================
+  function setupNavigation() {
+    const navBtns = document.querySelectorAll('.nav-btn');
+    const views = document.querySelectorAll('.view');
+
+    navBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        navBtns.forEach(b => b.classList.remove('active'));
+        views.forEach(v => v.classList.remove('active'));
+
+        btn.classList.add('active');
+        const targetId = btn.getAttribute('data-target');
+        const targetView = document.getElementById(targetId);
+        if (targetView) targetView.classList.add('active');
+
+        if (targetId === 'history-page') loadHistory();
+      });
+    });
+  }
+
+  // ==========================================
+  // EVENT LISTENERS
+  // ==========================================
+  function setupEventListeners() {
+    document.getElementById('btn-save-settings').addEventListener('click', saveConfig);
+
+    document.getElementById('btn-camera').addEventListener('click', () => {
+      document.getElementById('camera-input').click();
+    });
+
+    document.getElementById('btn-gallery').addEventListener('click', () => {
+      document.getElementById('gallery-input').click();
+    });
+
+    document.getElementById('camera-input').addEventListener('change', handleFileSelect);
+    document.getElementById('gallery-input').addEventListener('change', handleFileSelect);
+
+    document.getElementById('btn-process').addEventListener('click', processReceipts);
+    document.getElementById('btn-save-record').addEventListener('click', saveRecordToDatabase);
+    document.getElementById('btn-clear').addEventListener('click', resetScanUI);
+  }
+
+  function handleFileSelect(e) {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    selectedFiles = [...selectedFiles, ...Array.from(files)];
+    renderImagePreviews();
+    document.getElementById('btn-process').style.display = 'block';
+    document.getElementById('btn-clear').style.display = 'block';
+
+    // Reset input value so the same file can be re-selected
+    e.target.value = '';
+  }
+
+  // ==========================================
+  // IMAGE PREVIEW
+  // ==========================================
+  function renderImagePreviews() {
+    const container = document.getElementById('image-preview-container');
+    const countEl = document.getElementById('selected-count');
+
+    // Revoke previous object URLs to prevent memory leaks
+    objectUrls.forEach(url => URL.revokeObjectURL(url));
+    objectUrls = [];
+
+    if (selectedFiles.length === 0) {
+      container.style.display = 'none';
+      countEl.style.display = 'none';
+      container.innerHTML = '';
+      return;
+    }
+
+    container.style.display = 'flex';
+    countEl.style.display = 'block';
+    countEl.textContent = `${selectedFiles.length} receipt${selectedFiles.length > 1 ? 's' : ''} selected`;
+    container.innerHTML = '';
+
+    selectedFiles.forEach(file => {
+      const url = URL.createObjectURL(file);
+      objectUrls.push(url);
+      const img = document.createElement('img');
+      img.src = url;
+      img.className = 'img-thumb';
+      img.alt = 'Receipt preview';
+      container.appendChild(img);
+    });
+  }
+
+  function resetScanUI() {
+    selectedFiles = [];
+    currentResults = null;
+    objectUrls.forEach(url => URL.revokeObjectURL(url));
+    objectUrls = [];
+    renderImagePreviews();
+    document.getElementById('btn-process').style.display = 'none';
+    document.getElementById('btn-clear').style.display = 'none';
+    document.getElementById('results-panel').style.display = 'none';
+    document.getElementById('status-indicator').style.display = 'none';
+    document.getElementById('currency-grid').innerHTML = '';
+  }
+
+  // ==========================================
+  // RECEIPT PROCESSING
+  // ==========================================
+  const PROMPT = `You are a receipt/bill analyzer. Analyze every image provided. Each image is a receipt or bill.
+
+For EACH receipt, identify the total amount and its currency (TL, USD, EUR, or GBP).
+If a receipt shows multiple currencies, extract each separately.
+Sum up all amounts per currency across ALL receipts.
+
+Return ONLY valid JSON, no markdown, no explanation:
+{"TL": 0, "USD": 0, "EUR": 0, "GBP": 0}
+
+Rules:
+- Use the TOTAL / TOPLAM / Grand Total line, not individual item prices.
+- If the currency symbol is ₺ or "TRY", map it to "TL".
+- If you can't determine the currency, default to TL.
+- Numbers must be plain (no thousands separators). Use dot for decimals.
+- If no amount found for a currency, set it to 0.`;
+
+  function toBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = () => reject(new Error('Failed to read file: ' + file.name));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function processReceipts() {
+    if (!appConfig.apiKey) {
+      showToast('Set configuration key in settings');
+      return;
+    }
+    if (selectedFiles.length === 0) return;
+
+    const btnProcess = document.getElementById('btn-process');
+    const indicator = document.getElementById('status-indicator');
+    const resultsPanel = document.getElementById('results-panel');
+
+    btnProcess.style.display = 'none';
+    resultsPanel.style.display = 'none';
+    indicator.style.display = 'flex';
+
+    try {
+      // Convert all images to base64
+      const imageParts = [];
+      for (const file of selectedFiles) {
+        const b64 = await toBase64(file);
+        imageParts.push({
+          inlineData: { mimeType: file.type || 'image/jpeg', data: b64 }
+        });
+      }
+
+      const payload = {
+        contents: [{ parts: [...imageParts, { text: PROMPT }] }],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: 'application/json'
+        }
+      };
+
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${appConfig.apiKey}`;
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody?.error?.message || `HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      // Safely navigate the response
+      const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) {
+        throw new Error('Empty response from analysis engine');
+      }
+
+      const data = JSON.parse(text);
+      renderResults(data);
+      showToast('Analysis complete');
+
+    } catch (err) {
+      console.error('Process error:', err);
+      showToast(err.message || 'Processing failed');
+      btnProcess.style.display = 'block';
+    } finally {
+      indicator.style.display = 'none';
+    }
+  }
+
+  // ==========================================
+  // RESULTS RENDERING
+  // ==========================================
+  function renderResults(data) {
+    currentResults = {
+      TL: Math.round((Number(data.TL) || 0) * 100) / 100,
+      USD: Math.round((Number(data.USD) || 0) * 100) / 100,
+      EUR: Math.round((Number(data.EUR) || 0) * 100) / 100,
+      GBP: Math.round((Number(data.GBP) || 0) * 100) / 100
+    };
+
+    const grid = document.getElementById('currency-grid');
+    grid.innerHTML = '';
+
+    const currencies = ['TL', 'USD', 'EUR', 'GBP'];
+    const fmt = (v) => v.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    currencies.forEach(curr => {
+      const total = currentResults[curr];
+      if (total === 0) return; // only show currencies with value
+
+      const net = Math.round(total * (1 - DEDUCTION_RATE) * 100) / 100;
+
+      const card = document.createElement('div');
+      card.className = 'curr-card';
+      card.innerHTML = `
+        <div class="curr-label">${curr}</div>
+        <div class="curr-val">${fmt(total)}</div>
+        <div class="curr-deduction">Net (-4%): <span>${fmt(net)}</span></div>
+      `;
+      grid.appendChild(card);
+    });
+
+    // If ALL are zero, show a message
+    const allZero = currencies.every(c => currentResults[c] === 0);
+    if (allZero) {
+      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-secondary);padding:20px;">No amounts detected in receipts.</div>';
+    }
+
+    document.getElementById('results-panel').style.display = 'block';
+  }
+
+  // ==========================================
+  // DATABASE — SAVE
+  // ==========================================
+  async function saveRecordToDatabase() {
+    if (!sbClient) {
+      showToast('Database not configured');
+      return;
+    }
+    if (!currentResults) return;
+
+    const btn = document.getElementById('btn-save-record');
+    btn.textContent = 'Saving...';
+    btn.disabled = true;
+
+    try {
+      const { error } = await sbClient
+        .from('receipt_analyses')
+        .insert([{
+          tl: currentResults.TL,
+          usd: currentResults.USD,
+          eur: currentResults.EUR,
+          gbp: currentResults.GBP,
+          raw_data: currentResults
+        }]);
+
+      if (error) throw error;
+
+      showToast('Record saved');
+      resetScanUI();
+    } catch (e) {
+      console.error('Save error:', e);
+      showToast('Save failed: ' + (e.message || 'Unknown error'));
+    } finally {
+      btn.textContent = 'Save Record';
+      btn.disabled = false;
+    }
+  }
+
+  // ==========================================
+  // DATABASE — HISTORY
+  // ==========================================
+  async function loadHistory() {
+    if (!sbClient) return;
+
+    const container = document.getElementById('history-container');
+
+    try {
+      const { data, error } = await sbClient
+        .from('receipt_analyses')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        container.innerHTML = '<div class="history-empty">No records yet.</div>';
+        return;
+      }
+
+      const fmt = (v) => Number(v || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+      container.innerHTML = data.map(row => {
+        const d = new Date(row.created_at);
+        const dateStr = d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+          + ' ' + d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+
+        const currencies = [
+          { key: 'tl', label: 'TL' },
+          { key: 'usd', label: 'USD' },
+          { key: 'eur', label: 'EUR' },
+          { key: 'gbp', label: 'GBP' }
+        ];
+
+        let statsHTML = currencies
+          .filter(c => Number(row[c.key] || 0) > 0)
+          .map(c => {
+            const val = Number(row[c.key]);
+            const net = Math.round(val * (1 - DEDUCTION_RATE) * 100) / 100;
+            return `<div class="h-stat"><span>${c.label}:</span> ${fmt(val)} (Net: ${fmt(net)})</div>`;
+          })
+          .join('');
+
+        if (!statsHTML) statsHTML = '<div class="h-stat">No amounts</div>';
+
+        return `
+          <div class="history-item">
+            <div class="history-header">
+              <div class="history-date">${dateStr}</div>
+              <button class="history-delete" onclick="window.__deleteRecord('${row.id}', this)">Delete</button>
+            </div>
+            <div class="history-stats">${statsHTML}</div>
+          </div>
+        `;
+      }).join('');
+
+    } catch (e) {
+      console.error('History load error:', e);
+      container.innerHTML = '<div class="history-empty">Failed to load records.</div>';
+    }
+  }
+
+  // Expose delete to global scope (needed for onclick in dynamic HTML)
+  window.__deleteRecord = async function (id, btnEl) {
+    if (!sbClient || !id) return;
+
+    btnEl.textContent = '...';
+    btnEl.disabled = true;
+
+    try {
+      const { error } = await sbClient
+        .from('receipt_analyses')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      showToast('Record deleted');
+      loadHistory();
+    } catch (e) {
+      console.error('Delete error:', e);
+      showToast('Delete failed');
+      btnEl.textContent = 'Delete';
+      btnEl.disabled = false;
+    }
+  };
+
+  // ==========================================
+  // TOAST
+  // ==========================================
+  function showToast(msg) {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+
+    // Clear previous timer to prevent overlap
+    if (toastTimer) clearTimeout(toastTimer);
+
+    toast.classList.add('show');
+    toastTimer = setTimeout(() => {
+      toast.classList.remove('show');
+      toastTimer = null;
+    }, 3000);
+  }
+
+})();
