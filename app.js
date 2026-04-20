@@ -9,7 +9,7 @@
   // ==========================================
   const CONFIG_KEY = 'cp_config';
   const DEFAULT_API_KEY = ''; // Enter via Settings page
-  const GEMINI_MODEL = 'gemini-2.5-flash';
+  const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
   const DEDUCTION_RATE = 0.04; // 4%
 
   let appConfig = {
@@ -254,44 +254,59 @@ Rules:
         }
       };
 
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${appConfig.apiKey}`;
+      // Try models in fallback order
+      let lastError = null;
+      for (const model of GEMINI_MODELS) {
+        try {
+          console.log('Trying model:', model);
+          const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${appConfig.apiKey}`;
 
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+          const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
 
-      if (!response.ok) {
-        const errBody = await response.json().catch(() => ({}));
-        throw new Error(errBody?.error?.message || `HTTP ${response.status}`);
-      }
+          if (!response.ok) {
+            const errBody = await response.json().catch(() => ({}));
+            const msg = errBody?.error?.message || `HTTP ${response.status}`;
+            console.warn(`Model ${model} failed:`, msg);
+            lastError = new Error(msg);
+            continue; // try next model
+          }
 
-      const result = await response.json();
+          const result = await response.json();
 
-      // Safely navigate the response — thinking models may return thought parts before text
-      const parts = result?.candidates?.[0]?.content?.parts;
-      if (!parts || parts.length === 0) {
-        throw new Error('Empty response from analysis engine');
-      }
+          // Safely navigate — thinking models return thought parts before text
+          const parts = result?.candidates?.[0]?.content?.parts;
+          if (!parts || parts.length === 0) {
+            lastError = new Error('Empty response');
+            continue;
+          }
 
-      // Find the last text part (thinking models put thoughts first, answer last)
-      let text = null;
-      for (let i = parts.length - 1; i >= 0; i--) {
-        if (parts[i].text) {
-          text = parts[i].text;
-          break;
+          // Find the last text part
+          let text = null;
+          for (let i = parts.length - 1; i >= 0; i--) {
+            if (parts[i].text) { text = parts[i].text; break; }
+          }
+
+          if (!text) { lastError = new Error('No text in response'); continue; }
+
+          console.log('Success with model:', model);
+          const data = JSON.parse(text);
+          renderResults(data);
+          showToast('Analysis complete');
+          lastError = null;
+          break; // success, stop trying
+
+        } catch (e) {
+          console.warn(`Model ${model} error:`, e.message);
+          lastError = e;
+          continue;
         }
       }
 
-      if (!text) {
-        throw new Error('No text in response');
-      }
-
-      console.log('Raw API response text:', text);
-      const data = JSON.parse(text);
-      renderResults(data);
-      showToast('Analysis complete');
+      if (lastError) throw lastError;
 
     } catch (err) {
       console.error('Process error:', err);
