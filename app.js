@@ -8,7 +8,7 @@
   // CONFIG & STATE
   // ==========================================
   const CONFIG_KEY = 'cp_config';
-  const DEFAULT_API_KEY = 'AIzaSyDgqxL14Q4JxlIHFO-X76OYqpRp4gywIlY';
+  const DEFAULT_API_KEY = ''; // Enter via Settings page
   const GEMINI_MODEL = 'gemini-2.5-flash';
   const DEDUCTION_RATE = 0.04; // 4%
 
