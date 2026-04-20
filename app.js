@@ -36,15 +36,39 @@
   // CONFIG
   // ==========================================
   function loadConfig() {
-    const saved = localStorage.getItem(CONFIG_KEY);
-    if (saved) {
+    // Priority: URL hash > localStorage
+    let loaded = false;
+
+    // 1. Try loading from URL hash (works in incognito)
+    const hash = window.location.hash.slice(1);
+    if (hash) {
       try {
-        const p = JSON.parse(saved);
-        appConfig.apiKey = p.apiKey || DEFAULT_API_KEY;
-        appConfig.sbUrl = p.sbUrl || '';
-        appConfig.sbKey = p.sbKey || '';
+        const decoded = JSON.parse(atob(hash));
+        if (decoded.apiKey || decoded.sbUrl) {
+          appConfig.apiKey = decoded.apiKey || DEFAULT_API_KEY;
+          appConfig.sbUrl = decoded.sbUrl || '';
+          appConfig.sbKey = decoded.sbKey || '';
+          // Also persist to localStorage for normal tabs
+          try { localStorage.setItem(CONFIG_KEY, JSON.stringify(appConfig)); } catch(e) {}
+          loaded = true;
+        }
+      } catch (e) { /* invalid hash, ignore */ }
+    }
+
+    // 2. Fallback to localStorage
+    if (!loaded) {
+      try {
+        const saved = localStorage.getItem(CONFIG_KEY);
+        if (saved) {
+          const p = JSON.parse(saved);
+          appConfig.apiKey = p.apiKey || DEFAULT_API_KEY;
+          appConfig.sbUrl = p.sbUrl || '';
+          appConfig.sbKey = p.sbKey || '';
+          loaded = true;
+        }
       } catch (e) { /* use defaults */ }
     }
+
     document.getElementById('input-api-key').value = appConfig.apiKey;
     document.getElementById('input-sb-url').value = appConfig.sbUrl;
     document.getElementById('input-sb-key').value = appConfig.sbKey;
@@ -54,9 +78,16 @@
     appConfig.apiKey = document.getElementById('input-api-key').value.trim() || DEFAULT_API_KEY;
     appConfig.sbUrl = document.getElementById('input-sb-url').value.trim();
     appConfig.sbKey = document.getElementById('input-sb-key').value.trim();
-    localStorage.setItem(CONFIG_KEY, JSON.stringify(appConfig));
+
+    // Save to localStorage
+    try { localStorage.setItem(CONFIG_KEY, JSON.stringify(appConfig)); } catch(e) {}
+
+    // Encode config into URL hash (so bookmarking/incognito works)
+    const encoded = btoa(JSON.stringify(appConfig));
+    history.replaceState(null, '', '#' + encoded);
+
     initSupabase();
-    showToast('Configuration saved');
+    showToast('Saved — bookmark this page to keep your config');
   }
 
   // ==========================================
