@@ -1,5 +1,5 @@
-// Check Please — Application Logic
-// ==================================
+// Check Please — v2.0
+// =====================
 
 (function () {
   'use strict';
@@ -8,24 +8,19 @@
   // CONFIG & STATE
   // ==========================================
   const CONFIG_KEY = 'cp_config';
-  const DEFAULT_API_KEY = ''; // Enter via Settings page
+  const DEFAULT_API_KEY = '';
   const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-  const DEDUCTION_RATE = 0.04; // 4%
+  const DEDUCTION_RATE = 0.04;
 
-  let appConfig = {
-    apiKey: DEFAULT_API_KEY,
-    sbUrl: '',
-    sbKey: ''
-  };
-
+  let appConfig = { apiKey: DEFAULT_API_KEY, sbUrl: '', sbKey: '' };
   let selectedFiles = [];
-  let objectUrls = [];       // Track to revoke later
-  let sbClient = null;       // Supabase client (renamed to avoid global collision)
+  let objectUrls = [];
+  let sbClient = null;
   let currentResults = null;
   let toastTimer = null;
 
   // ==========================================
-  // INITIALIZATION
+  // INIT
   // ==========================================
   document.addEventListener('DOMContentLoaded', init);
 
@@ -34,24 +29,22 @@
     initSupabase();
     setupNavigation();
     setupEventListeners();
+    setupToggleVisibility();
   }
 
   // ==========================================
-  // CONFIG MANAGEMENT
+  // CONFIG
   // ==========================================
   function loadConfig() {
     const saved = localStorage.getItem(CONFIG_KEY);
     if (saved) {
       try {
-        const parsed = JSON.parse(saved);
-        appConfig.apiKey = parsed.apiKey || DEFAULT_API_KEY;
-        appConfig.sbUrl = parsed.sbUrl || '';
-        appConfig.sbKey = parsed.sbKey || '';
-      } catch (e) {
-        console.warn('Config parse error, using defaults');
-      }
+        const p = JSON.parse(saved);
+        appConfig.apiKey = p.apiKey || DEFAULT_API_KEY;
+        appConfig.sbUrl = p.sbUrl || '';
+        appConfig.sbKey = p.sbKey || '';
+      } catch (e) { /* use defaults */ }
     }
-    // Populate settings form
     document.getElementById('input-api-key').value = appConfig.apiKey;
     document.getElementById('input-sb-url').value = appConfig.sbUrl;
     document.getElementById('input-sb-key').value = appConfig.sbKey;
@@ -70,22 +63,24 @@
   // SUPABASE
   // ==========================================
   function initSupabase() {
-    const statusEl = document.getElementById('system-status-msg');
+    const el = document.getElementById('system-status-msg');
 
     if (!appConfig.sbUrl || !appConfig.sbKey) {
       sbClient = null;
-      statusEl.textContent = 'Database not configured';
+      el.textContent = 'Database not configured';
+      el.className = 'system-status';
       return;
     }
 
     try {
       sbClient = window.supabase.createClient(appConfig.sbUrl, appConfig.sbKey);
-      statusEl.textContent = 'Database: Connected';
-      loadHistory(); // only load history after successful init
+      el.textContent = '● Connected';
+      el.className = 'system-status connected';
+      loadHistory();
     } catch (e) {
       sbClient = null;
-      statusEl.textContent = 'Database connection failed';
-      console.error('Supabase init error:', e);
+      el.textContent = '● Connection failed';
+      el.className = 'system-status error';
     }
   }
 
@@ -93,20 +88,19 @@
   // NAVIGATION
   // ==========================================
   function setupNavigation() {
-    const navBtns = document.querySelectorAll('.nav-btn');
+    const btns = document.querySelectorAll('.nav-btn');
     const views = document.querySelectorAll('.view');
 
-    navBtns.forEach(btn => {
+    btns.forEach(btn => {
       btn.addEventListener('click', () => {
-        navBtns.forEach(b => b.classList.remove('active'));
+        btns.forEach(b => b.classList.remove('active'));
         views.forEach(v => v.classList.remove('active'));
-
         btn.classList.add('active');
-        const targetId = btn.getAttribute('data-target');
-        const targetView = document.getElementById(targetId);
-        if (targetView) targetView.classList.add('active');
 
-        if (targetId === 'history-page') loadHistory();
+        const target = document.getElementById(btn.dataset.target);
+        if (target) target.classList.add('active');
+
+        if (btn.dataset.target === 'history-page') loadHistory();
       });
     });
   }
@@ -116,87 +110,108 @@
   // ==========================================
   function setupEventListeners() {
     document.getElementById('btn-save-settings').addEventListener('click', saveConfig);
-
-    document.getElementById('btn-camera').addEventListener('click', () => {
-      document.getElementById('camera-input').click();
-    });
-
-    document.getElementById('btn-gallery').addEventListener('click', () => {
-      document.getElementById('gallery-input').click();
-    });
-
+    document.getElementById('btn-camera').addEventListener('click', () => document.getElementById('camera-input').click());
+    document.getElementById('btn-gallery').addEventListener('click', () => document.getElementById('gallery-input').click());
     document.getElementById('camera-input').addEventListener('change', handleFileSelect);
     document.getElementById('gallery-input').addEventListener('change', handleFileSelect);
-
     document.getElementById('btn-process').addEventListener('click', processReceipts);
-    document.getElementById('btn-save-record').addEventListener('click', saveRecordToDatabase);
+    document.getElementById('btn-save-record').addEventListener('click', saveRecord);
     document.getElementById('btn-clear').addEventListener('click', resetScanUI);
+    document.getElementById('btn-new-scan').addEventListener('click', resetScanUI);
   }
 
+  function setupToggleVisibility() {
+    const pairs = [
+      ['toggle-api-key', 'input-api-key'],
+      ['toggle-sb-key', 'input-sb-key']
+    ];
+    pairs.forEach(([btnId, inputId]) => {
+      document.getElementById(btnId).addEventListener('click', () => {
+        const input = document.getElementById(inputId);
+        input.type = input.type === 'password' ? 'text' : 'password';
+      });
+    });
+  }
+
+  // ==========================================
+  // FILE HANDLING
+  // ==========================================
   function handleFileSelect(e) {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    selectedFiles = [...selectedFiles, ...Array.from(files)];
-    renderImagePreviews();
-    document.getElementById('btn-process').style.display = 'block';
-    document.getElementById('btn-clear').style.display = 'block';
-
-    // Reset input value so the same file can be re-selected
+    if (!e.target.files || e.target.files.length === 0) return;
+    selectedFiles = [...selectedFiles, ...Array.from(e.target.files)];
     e.target.value = '';
+    updatePreview();
   }
 
-  // ==========================================
-  // IMAGE PREVIEW
-  // ==========================================
-  function renderImagePreviews() {
+  function removeFile(index) {
+    if (objectUrls[index]) URL.revokeObjectURL(objectUrls[index]);
+    selectedFiles.splice(index, 1);
+    objectUrls.splice(index, 1);
+    updatePreview();
+  }
+
+  function updatePreview() {
+    const section = document.getElementById('preview-section');
     const container = document.getElementById('image-preview-container');
     const countEl = document.getElementById('selected-count');
+    const emptyState = document.getElementById('empty-state');
 
-    // Revoke previous object URLs to prevent memory leaks
-    objectUrls.forEach(url => URL.revokeObjectURL(url));
+    // Revoke old URLs
+    objectUrls.forEach(u => URL.revokeObjectURL(u));
     objectUrls = [];
 
     if (selectedFiles.length === 0) {
-      container.style.display = 'none';
-      countEl.style.display = 'none';
+      section.style.display = 'none';
+      emptyState.style.display = 'flex';
       container.innerHTML = '';
       return;
     }
 
-    container.style.display = 'flex';
-    countEl.style.display = 'block';
-    countEl.textContent = `${selectedFiles.length} receipt${selectedFiles.length > 1 ? 's' : ''} selected`;
+    emptyState.style.display = 'none';
+    section.style.display = 'block';
+    countEl.textContent = `${selectedFiles.length} receipt${selectedFiles.length > 1 ? 's' : ''}`;
     container.innerHTML = '';
 
-    selectedFiles.forEach(file => {
+    selectedFiles.forEach((file, i) => {
       const url = URL.createObjectURL(file);
       objectUrls.push(url);
+
+      const wrap = document.createElement('div');
+      wrap.className = 'img-thumb-wrap';
+
       const img = document.createElement('img');
       img.src = url;
       img.className = 'img-thumb';
-      img.alt = 'Receipt preview';
-      container.appendChild(img);
+      img.alt = 'Receipt';
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'img-remove';
+      removeBtn.innerHTML = '×';
+      removeBtn.addEventListener('click', () => removeFile(i));
+
+      wrap.appendChild(img);
+      wrap.appendChild(removeBtn);
+      container.appendChild(wrap);
     });
   }
 
   function resetScanUI() {
     selectedFiles = [];
     currentResults = null;
-    objectUrls.forEach(url => URL.revokeObjectURL(url));
+    objectUrls.forEach(u => URL.revokeObjectURL(u));
     objectUrls = [];
-    renderImagePreviews();
-    document.getElementById('btn-process').style.display = 'none';
-    document.getElementById('btn-clear').style.display = 'none';
+    document.getElementById('preview-section').style.display = 'none';
     document.getElementById('results-panel').style.display = 'none';
     document.getElementById('status-indicator').style.display = 'none';
+    document.getElementById('empty-state').style.display = 'flex';
+    document.getElementById('image-preview-container').innerHTML = '';
     document.getElementById('currency-grid').innerHTML = '';
   }
 
   // ==========================================
-  // RECEIPT PROCESSING
+  // PROCESSING
   // ==========================================
-  const PROMPT = `You are a receipt/bill analyzer. Analyze every image provided. Each image is a receipt or bill.
+  const PROMPT = `You are a receipt/bill analyzer. Analyze every image. Each image is a receipt or bill.
 
 For EACH receipt, identify the total amount and its currency (TL, USD, EUR, or GBP).
 If a receipt shows multiple currencies, extract each separately.
@@ -206,167 +221,138 @@ Return ONLY valid JSON, no markdown, no explanation:
 {"TL": 0, "USD": 0, "EUR": 0, "GBP": 0}
 
 Rules:
-- Use the TOTAL / TOPLAM / Grand Total line, not individual item prices.
-- If the currency symbol is ₺ or "TRY", map it to "TL".
-- If you can't determine the currency, default to TL.
-- Numbers must be plain (no thousands separators). Use dot for decimals.
-- If no amount found for a currency, set it to 0.`;
+- Use the TOTAL / TOPLAM / Grand Total line, NOT individual item prices.
+- ₺ or TRY → "TL".
+- If currency is unclear, default to TL.
+- Plain numbers (no thousands separators). Dot for decimals.
+- If no amount found for a currency, set to 0.`;
 
   function toBase64(file) {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result.split(',')[1]);
-      reader.onerror = () => reject(new Error('Failed to read file: ' + file.name));
-      reader.readAsDataURL(file);
+      const r = new FileReader();
+      r.onload = () => resolve(r.result.split(',')[1]);
+      r.onerror = () => reject(new Error('Read error: ' + file.name));
+      r.readAsDataURL(file);
     });
   }
 
   async function processReceipts() {
-    if (!appConfig.apiKey) {
-      showToast('Set configuration key in settings');
-      return;
-    }
+    if (!appConfig.apiKey) { showToast('Set your key in settings'); return; }
     if (selectedFiles.length === 0) return;
 
-    const btnProcess = document.getElementById('btn-process');
     const indicator = document.getElementById('status-indicator');
     const resultsPanel = document.getElementById('results-panel');
+    const previewSection = document.getElementById('preview-section');
 
-    btnProcess.style.display = 'none';
+    previewSection.style.display = 'none';
     resultsPanel.style.display = 'none';
     indicator.style.display = 'flex';
 
     try {
-      // Convert all images to base64
-      const imageParts = [];
-      for (const file of selectedFiles) {
-        const b64 = await toBase64(file);
-        imageParts.push({
-          inlineData: { mimeType: file.type || 'image/jpeg', data: b64 }
-        });
+      const parts = [];
+      for (const f of selectedFiles) {
+        const b64 = await toBase64(f);
+        parts.push({ inlineData: { mimeType: f.type || 'image/jpeg', data: b64 } });
       }
 
       const payload = {
-        contents: [{ parts: [...imageParts, { text: PROMPT }] }],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: 'application/json'
-        }
+        contents: [{ parts: [...parts, { text: PROMPT }] }],
+        generationConfig: { temperature: 0, responseMimeType: 'application/json' }
       };
 
-      // Try models in fallback order
-      let lastError = null;
+      let lastErr = null;
       for (const model of GEMINI_MODELS) {
         try {
-          console.log('Trying model:', model);
-          const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${appConfig.apiKey}`;
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${appConfig.apiKey}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
+          );
 
-          const response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-
-          if (!response.ok) {
-            const errBody = await response.json().catch(() => ({}));
-            const msg = errBody?.error?.message || `HTTP ${response.status}`;
-            console.warn(`Model ${model} failed:`, msg);
-            lastError = new Error(msg);
-            continue; // try next model
-          }
-
-          const result = await response.json();
-
-          // Safely navigate — thinking models return thought parts before text
-          const parts = result?.candidates?.[0]?.content?.parts;
-          if (!parts || parts.length === 0) {
-            lastError = new Error('Empty response');
+          if (!res.ok) {
+            const e = await res.json().catch(() => ({}));
+            lastErr = new Error(e?.error?.message || `HTTP ${res.status}`);
             continue;
           }
 
-          // Find the last text part
-          let text = null;
-          for (let i = parts.length - 1; i >= 0; i--) {
-            if (parts[i].text) { text = parts[i].text; break; }
+          const result = await res.json();
+          const rParts = result?.candidates?.[0]?.content?.parts;
+          if (!rParts?.length) { lastErr = new Error('Empty response'); continue; }
+
+          // Find last text part (thinking models put thoughts first)
+          let txt = null;
+          for (let i = rParts.length - 1; i >= 0; i--) {
+            if (rParts[i].text) { txt = rParts[i].text; break; }
           }
+          if (!txt) { lastErr = new Error('No text'); continue; }
 
-          if (!text) { lastError = new Error('No text in response'); continue; }
-
-          console.log('Success with model:', model);
-          const data = JSON.parse(text);
-          renderResults(data);
+          renderResults(JSON.parse(txt));
           showToast('Analysis complete');
-          lastError = null;
-          break; // success, stop trying
+          lastErr = null;
+          break;
 
-        } catch (e) {
-          console.warn(`Model ${model} error:`, e.message);
-          lastError = e;
-          continue;
-        }
+        } catch (e) { lastErr = e; continue; }
       }
 
-      if (lastError) throw lastError;
+      if (lastErr) throw lastErr;
 
     } catch (err) {
-      console.error('Process error:', err);
+      console.error(err);
       showToast(err.message || 'Processing failed');
-      btnProcess.style.display = 'block';
+      // Show preview again so user can retry
+      document.getElementById('preview-section').style.display = 'block';
     } finally {
       indicator.style.display = 'none';
     }
   }
 
   // ==========================================
-  // RESULTS RENDERING
+  // RESULTS
   // ==========================================
   function renderResults(data) {
-    currentResults = {
-      TL: Math.round((Number(data.TL) || 0) * 100) / 100,
-      USD: Math.round((Number(data.USD) || 0) * 100) / 100,
-      EUR: Math.round((Number(data.EUR) || 0) * 100) / 100,
-      GBP: Math.round((Number(data.GBP) || 0) * 100) / 100
-    };
+    const round2 = v => Math.round((Number(v) || 0) * 100) / 100;
+    currentResults = { TL: round2(data.TL), USD: round2(data.USD), EUR: round2(data.EUR), GBP: round2(data.GBP) };
 
     const grid = document.getElementById('currency-grid');
     grid.innerHTML = '';
 
-    const currencies = ['TL', 'USD', 'EUR', 'GBP'];
-    const fmt = (v) => v.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmt = v => v.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const symbols = { TL: '₺', USD: '$', EUR: '€', GBP: '£' };
+    const active = ['TL', 'USD', 'EUR', 'GBP'].filter(c => currentResults[c] > 0);
 
-    currencies.forEach(curr => {
+    if (active.length === 0) {
+      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-3);padding:32px 0;font-size:14px;">No amounts detected.</div>';
+      document.getElementById('results-panel').style.display = 'block';
+      return;
+    }
+
+    active.forEach(curr => {
       const total = currentResults[curr];
-      if (total === 0) return; // only show currencies with value
-
-      const net = Math.round(total * (1 - DEDUCTION_RATE) * 100) / 100;
-
+      const net = round2(total * (1 - DEDUCTION_RATE));
       const card = document.createElement('div');
       card.className = 'curr-card';
       card.innerHTML = `
         <div class="curr-label">${curr}</div>
-        <div class="curr-val">${fmt(total)}</div>
-        <div class="curr-deduction">Net (-4%): <span>${fmt(net)}</span></div>
+        <div class="curr-val">${symbols[curr]}${fmt(total)}</div>
+        <div class="curr-deduction">Net (-4%): <span>${symbols[curr]}${fmt(net)}</span></div>
       `;
       grid.appendChild(card);
     });
 
-    // If ALL are zero, show a message
-    const allZero = currencies.every(c => currentResults[c] === 0);
-    if (allZero) {
-      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-secondary);padding:20px;">No amounts detected in receipts.</div>';
+    // If only one currency, make it span full width
+    if (active.length === 1) {
+      grid.querySelector('.curr-card').classList.add('full-width');
     }
 
     document.getElementById('results-panel').style.display = 'block';
+    // Scroll results into view
+    document.getElementById('results-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   // ==========================================
-  // DATABASE — SAVE
+  // DATABASE
   // ==========================================
-  async function saveRecordToDatabase() {
-    if (!sbClient) {
-      showToast('Database not configured');
-      return;
-    }
+  async function saveRecord() {
+    if (!sbClient) { showToast('Configure database in settings'); return; }
     if (!currentResults) return;
 
     const btn = document.getElementById('btn-save-record');
@@ -377,32 +363,24 @@ Rules:
       const { error } = await sbClient
         .from('receipt_analyses')
         .insert([{
-          tl: currentResults.TL,
-          usd: currentResults.USD,
-          eur: currentResults.EUR,
-          gbp: currentResults.GBP,
+          tl: currentResults.TL, usd: currentResults.USD,
+          eur: currentResults.EUR, gbp: currentResults.GBP,
           raw_data: currentResults
         }]);
-
       if (error) throw error;
 
       showToast('Record saved');
       resetScanUI();
     } catch (e) {
-      console.error('Save error:', e);
-      showToast('Save failed: ' + (e.message || 'Unknown error'));
+      showToast('Save failed');
     } finally {
       btn.textContent = 'Save Record';
       btn.disabled = false;
     }
   }
 
-  // ==========================================
-  // DATABASE — HISTORY
-  // ==========================================
   async function loadHistory() {
     if (!sbClient) return;
-
     const container = document.getElementById('history-container');
 
     try {
@@ -413,76 +391,69 @@ Rules:
         .limit(50);
 
       if (error) throw error;
-
       if (!data || data.length === 0) {
-        container.innerHTML = '<div class="history-empty">No records yet.</div>';
+        container.innerHTML = `
+          <div class="history-empty">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;margin-bottom:12px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <div>No records yet</div>
+            <div class="history-hint">Scanned receipts will appear here.</div>
+          </div>`;
         return;
       }
 
-      const fmt = (v) => Number(v || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const fmt = v => Number(v || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const symbols = { tl: '₺', usd: '$', eur: '€', gbp: '£' };
+      const round2 = v => Math.round(v * 100) / 100;
 
-      container.innerHTML = data.map(row => {
+      container.innerHTML = data.map((row, idx) => {
         const d = new Date(row.created_at);
         const dateStr = d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' })
-          + ' ' + d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+          + ' · ' + d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 
         const currencies = [
-          { key: 'tl', label: 'TL' },
-          { key: 'usd', label: 'USD' },
-          { key: 'eur', label: 'EUR' },
-          { key: 'gbp', label: 'GBP' }
+          { key: 'tl', label: 'TL' }, { key: 'usd', label: 'USD' },
+          { key: 'eur', label: 'EUR' }, { key: 'gbp', label: 'GBP' }
         ];
 
-        let statsHTML = currencies
+        let stats = currencies
           .filter(c => Number(row[c.key] || 0) > 0)
           .map(c => {
-            const val = Number(row[c.key]);
-            const net = Math.round(val * (1 - DEDUCTION_RATE) * 100) / 100;
-            return `<div class="h-stat"><span>${c.label}:</span> ${fmt(val)} (Net: ${fmt(net)})</div>`;
+            const v = Number(row[c.key]);
+            const n = round2(v * (1 - DEDUCTION_RATE));
+            return `<div class="h-stat"><span>${c.label}</span> ${symbols[c.key]}${fmt(v)}</div>`;
           })
           .join('');
 
-        if (!statsHTML) statsHTML = '<div class="h-stat">No amounts</div>';
+        if (!stats) stats = '<div class="h-stat" style="color:var(--text-3)">No amounts</div>';
 
         return `
-          <div class="history-item">
+          <div class="history-item" style="animation-delay:${idx * 40}ms">
             <div class="history-header">
               <div class="history-date">${dateStr}</div>
-              <button class="history-delete" onclick="window.__deleteRecord('${row.id}', this)">Delete</button>
+              <button class="history-delete" onclick="window.__del('${row.id}',this)">Delete</button>
             </div>
-            <div class="history-stats">${statsHTML}</div>
-          </div>
-        `;
+            <div class="history-stats">${stats}</div>
+          </div>`;
       }).join('');
 
     } catch (e) {
-      console.error('History load error:', e);
       container.innerHTML = '<div class="history-empty">Failed to load records.</div>';
     }
   }
 
-  // Expose delete to global scope (needed for onclick in dynamic HTML)
-  window.__deleteRecord = async function (id, btnEl) {
+  window.__del = async function (id, btn) {
     if (!sbClient || !id) return;
-
-    btnEl.textContent = '...';
-    btnEl.disabled = true;
-
+    btn.textContent = '...';
+    btn.disabled = true;
     try {
-      const { error } = await sbClient
-        .from('receipt_analyses')
-        .delete()
-        .eq('id', id);
-
+      const { error } = await sbClient.from('receipt_analyses').delete().eq('id', id);
       if (error) throw error;
-
-      showToast('Record deleted');
+      showToast('Deleted');
       loadHistory();
     } catch (e) {
-      console.error('Delete error:', e);
       showToast('Delete failed');
-      btnEl.textContent = 'Delete';
-      btnEl.disabled = false;
+      btn.textContent = 'Delete';
+      btn.disabled = false;
     }
   };
 
@@ -490,17 +461,11 @@ Rules:
   // TOAST
   // ==========================================
   function showToast(msg) {
-    const toast = document.getElementById('toast');
-    toast.textContent = msg;
-
-    // Clear previous timer to prevent overlap
+    const el = document.getElementById('toast');
+    el.textContent = msg;
     if (toastTimer) clearTimeout(toastTimer);
-
-    toast.classList.add('show');
-    toastTimer = setTimeout(() => {
-      toast.classList.remove('show');
-      toastTimer = null;
-    }, 3000);
+    el.classList.add('show');
+    toastTimer = setTimeout(() => { el.classList.remove('show'); toastTimer = null; }, 3000);
   }
 
 })();
